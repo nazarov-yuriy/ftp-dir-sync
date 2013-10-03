@@ -1,6 +1,8 @@
 #!/usr/bin/perl
 use Getopt::Long;
 use Net::FTP;
+use Config::IniFiles;
+use Data::Dumper;
 use strict;
 use warnings;
 
@@ -8,7 +10,7 @@ use warnings;
 use constant {
 	DAEMON_VERSION    => "0.1",
 	DEFAULT_User      => "anonymous",
-	DEFAULT_Password  => undef,
+	DEFAULT_Password  => '',
 	DEFAULT_FTPType   => "passive",
 	DEFAULT_FTPPath   => "/",
 	DEFAULT_LocalPath => "./",
@@ -17,7 +19,7 @@ use constant {
 	DEFAULT_DifDate   => "yes",
 	DEFAULT_DifSize   => "yes",
 };
-my @config_search_paths = ( '/etc/ftp-dir-sync.conf', './' );
+my @config_search_paths = ( '/etc/ftp-dir-sync.conf', './ftp-dir-sync.conf', './ftp-dir-sync.ini');
 
 sub print_usage() {
 	print "Use:
@@ -35,6 +37,7 @@ sub error($) {
 
 sub print_to_log($) {
 	my ($message) = @_;
+	print "$message\n";	#ToDo: remove it after debug completed.
 }
 
 sub print_version() {
@@ -62,6 +65,12 @@ sub read_config($) {
 		'DifDate'   => DEFAULT_DifDate,
 		'DifSize'   => DEFAULT_DifSize,
 	);
+	my %ini;
+	tie %ini, 'Config::IniFiles', ( -file => $config_file_path );
+	for my $k (keys %{$ini{'global'}}){
+		$config{$k} = $ini{'global'}{$k};
+	}
+	return \%config;
 }
 
 sub daemonize {
@@ -93,7 +102,8 @@ sub download_files($) {
 	my $ftp = Net::FTP->new(
 		$host,
 		Debug   => 0,
-		Passive => $use_passive
+		Passive => $use_passive,
+		Timeout => 10,
 	) or die "Cannot connect to $host: $@";
 	
 	$ftp->login(
@@ -106,6 +116,7 @@ sub download_files($) {
 	my @files = $ftp->ls($remote_path);
 	
 	for my $file (@files){
+		print "getting file $file\n";	#ToDo: remove it after debug completed.
 		$ftp->get($remote_path.'/'.$file, $local_path.'/'.$file);
 	}
 }
@@ -119,6 +130,7 @@ sub run_daemon($) {
 		if ( defined $@ ) {
 			print_to_log($@);
 		}
+		print_to_log("Files were downloaded. Waiting ".$config_hash_ref->{'Period'}." s.");
 		sleep $config_hash_ref->{'Period'};
 	}
 }
@@ -148,6 +160,8 @@ sub main() {
 			error "Unable to open configuration file.";
 		}
 		my $config_hash_ref = read_config($config_file_path);
+		print Dumper $config_hash_ref;		#ToDo: remove it after debug completed.
+		
 		my $msg;
 		unless ( check_is_config_valid( $config_hash_ref, \$msg ) ) {
 			error $msg;
