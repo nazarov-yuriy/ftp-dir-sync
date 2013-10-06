@@ -4,6 +4,8 @@ use Net::FTP;
 use Config::IniFiles;
 use Data::Dumper;
 use Pod::Usage;
+use Term::ReadKey;
+use File::Basename;
 use strict	qw(refs vars);
 use warnings;
 
@@ -33,8 +35,11 @@ use constant {
 };
 my @config_search_paths = (
 	'/etc/ftp-dir-sync.conf',
+	'/etc/ftp-dir-sync.ini',
 	'./ftp-dir-sync.conf',
-	'./ftp-dir-sync.ini'
+	'./ftp-dir-sync.ini',
+	dirname($0).'/ftp-dir-sync.conf',
+	dirname($0).'/ftp-dir-sync.ini',
 );
 
 my $config_hash_ref;
@@ -55,12 +60,20 @@ my %service_properties_hash = (
 	'description' => 'keep local and remote directories in sync',
 	'display'     => 'ftp-dir-sync service',
 	'path'        => $^X,
-	'user'        => ".\\user",
-	'password'    => "",
 	'parameters'  => "\"$0\" --daemon",
 );
 
-sub install() {
+sub install($) {
+	my ($user) = @_;
+	if (defined $user){
+		$service_properties_hash{'user'} = ".\\$user";
+		print "Password for user $user: ";
+		ReadMode('noecho');
+		$service_properties_hash{'password'} = ReadLine(0);
+		chomp( $service_properties_hash{'password'} );
+		print "\n";
+		ReadMode('restore');
+	}
 	if ( Win32::Daemon::CreateService( \%service_properties_hash ) ) {
 		print "Installed";
 	}
@@ -70,45 +83,53 @@ sub install() {
 	}
 }
 
-sub uninsall() {
+sub uninstall() {
 	if ( Win32::Daemon::DeleteService( $service_properties_hash{'name'} ) ) {
 		print "Uninstalled";
+		return 0;
 	}
 	else {
-		print "Error " . Win32::Daemon::GetLastError();
-		exit 1;
+		print "Error with code: ".Win32::Daemon::GetLastError()." occured.";
+		return 1;
 	}
 }
 
 sub service_callback_start() {
-	my( $Event, $Context ) = @_;
+	my( $event, $context ) = @_;
 	$service_context{last_state} = SERVICE_RUNNING;
 	Win32::Daemon::State( SERVICE_RUNNING );
+	print_to_log("Event start: $event");
 }
 
 sub service_callback_running() {
-	my( $Event, $Context ) = @_;
+	my( $event, $context ) = @_;
+	print_to_log("Event running start: $event");
 	if( SERVICE_RUNNING == Win32::Daemon::State() ) {
-		eval { download_files($config_hash_ref); };
+		#eval { download_files($config_hash_ref); };
+		sleep 20;
 	}
+	print_to_log("Event running end: $event");
 }
 
 sub service_callback_stop() {
-	my( $Event, $Context ) = @_;
+	my( $event, $context ) = @_;
 	$service_context{'last_state'} = SERVICE_RUNNING;
 	Win32::Daemon::State( SERVICE_RUNNING );
+	print_to_log("Event stop: $event");
 }
 
 sub service_callback_pause() {
-	my( $Event, $Context ) = @_;
+	my( $event, $context ) = @_;
 	$service_context{'last_state'} = SERVICE_RUNNING;
 	Win32::Daemon::State( SERVICE_RUNNING );
+	print_to_log("Event pause: $event");
 }
 
 sub service_callback_continue() {
-	my( $Event, $Context ) = @_;
+	my( $event, $context ) = @_;
 	$service_context{'last_state'} = SERVICE_STOPPED;
 	Win32::Daemon::State( SERVICE_STOPPED );
+	print_to_log("Event continue: $event");
 }
 
 sub setup_service {
@@ -119,7 +140,9 @@ sub setup_service {
 		pause    => \&service_callback_pause,
 		continue => \&service_callback_continue,
 	}) or error("register callbacks failed\n");
-	Win32::Daemon::StartService( \%service_context, 2000 );
+	print "Registered\n";
+	Win32::Daemon::StartService( \%service_context, 1000 );
+	print "Started\n";
 	exit 0;
 }
 
@@ -140,7 +163,9 @@ sub error($) {
 
 sub print_to_log($) {
 	my ($message) = @_;
-	print "$message\n";	#ToDo: remove it after debug completed.
+	open LOG, '>>', dirname($0).'/log.txt';
+	print LOG "$message\n";	#ToDo: remove it after debug completed.
+	close LOG;
 }
 
 sub read_config($) {
@@ -204,8 +229,7 @@ sub print_man(){
 }
 
 sub download_files() {
-	my $use_passive = !exists $config_hash_ref->{'FTPType'}
-	  || $config_hash_ref->{'FTPType'} eq 'passive';
+	my $use_passive = !exists $config_hash_ref->{'FTPType'} || $config_hash_ref->{'FTPType'} eq 'passive';
 	my $host = $config_hash_ref->{'Host'};
 	my $ftp  = Net::FTP->new(
 		$host,
@@ -231,23 +255,47 @@ sub download_files() {
 	}
 }
 
-sub run_daemon() {
-	daemonize() if is_linux();
-
-	while (1) {
-		eval { download_files(); };
-		if ( defined $@ ) {
-			print_to_log($@);
+sub run_daemon($$) {
+	my ($config_file_path, $config_search_paths_ref) = @_;
+	unless ( defined $config_file_path ) {
+		for my $path (@{$config_search_paths_ref}) {
+			$config_file_path = $path if -f $path;
 		}
-		print_to_log( "Files were downloaded. Waiting "
-			  . $config_hash_ref->{'Period'}
-			  . " s." );
-		sleep $config_hash_ref->{'Period'};
+	}
+	unless ( defined $config_file_path ) {
+		error "Unable to open configuration file.";
+		print_to_log("Unable to open configuration file.");
+	}
+	$config_hash_ref = read_config($config_file_path);
+	print Dumper $config_hash_ref;    #ToDo: remove it after debug completed.
+
+	unless ( defined $config_hash_ref->{'Host'} ) {
+		error "Host is not specified.";
+	}
+	if($^O eq 'linux'){
+		daemonize();
+		
+		while (1) {
+			eval { download_files(); };
+			if ( defined $@ ) {
+				print_to_log($@);
+			}
+			print_to_log( "Files were downloaded. Waiting "
+				  . $config_hash_ref->{'Period'}
+				  . " s." );
+			sleep $config_hash_ref->{'Period'};
+		}
+	}
+	elsif($^O eq 'MSWin32'){
+		setup_service();
+	}
+	else{
+		error("Unsupported platform.");
 	}
 }
 
 sub main() {
-	my ( $config_file_path, $daemon, $help, $man, $version, $install, $uninstall );
+	my ($config_file_path, $daemon, $help, $man, $version, $install, $uninstall, $user);
 	GetOptions(
 		"config:s"  => \$config_file_path,
 		"daemon"    => \$daemon,
@@ -255,6 +303,7 @@ sub main() {
 		"man"       => \$man,
 		"version"   => \$version,
 		"install"   => \$install,  #ToDo: remove this from linux version
+		"user:s"    => \$user,
 		"uninstall" => \$uninstall,
 	);
 
@@ -268,31 +317,13 @@ sub main() {
 		exit print_version();
 	}
 	elsif ($daemon) {
-		unless ( defined $config_file_path ) {
-			for my $path (@config_search_paths) {
-				$config_file_path = $path if -f $path;
-			}
-		}
-		unless ( defined $config_file_path ) {
-			error "Unable to open configuration file.";
-		}
-		$config_hash_ref = read_config($config_file_path);
-		print Dumper $config_hash_ref;    #ToDo: remove it after debug completed.
-
-		my $msg;
-		unless ( check_is_config_valid( $config_hash_ref, \$msg ) ) {
-			error $msg;
-		}
-		unless ( defined $config_hash_ref->{'Host'} ) {
-			error "Host is not specified.";
-		}
-		run_daemon();
+		exit run_daemon($config_file_path, \@config_search_paths);
 	}
 	elsif ($install) {
-		install();
+		exit install($user);
 	}
 	elsif ($uninstall) {
-		uninstall();
+		exit uninstall();
 	}
 	else {
 		exit print_usage();
@@ -307,25 +338,23 @@ ftp-dir-syncd - Crossplatform daemon/service to keep local and remote(accessible
 
 =head1 SYNOPSIS
 
-ftp-dir-syncd.pl [options]
+ftp-dir-syncd.pl [action]
 
-Options:
+Actions:
 	
-	--help          to view help
+	--help                          to view help
 	
-	--man           to view full documentation
+	--man                           to view full documentation
 	
-	--version       to print version
+	--version                       to print version
 	
-	--config=<file> to specify custom path to file
+	--daemon [--config=<file>]      to start as daemon/service
 	
-	--daemon        to start as daemon/service
+Windows only actions:
 	
-Windows only options:
+	--install [--user=<user>]       to install service to run as system user(or specified user)
 	
-	--install       to install service
-	
-	--uninstall     to uninstall service
+	--uninstall                     to uninstall service
 	
 	
 
@@ -335,31 +364,36 @@ Windows only options:
 
 =item B<--help>
 
-TBD.
+Just print help.
 
 =item B<--man>
 
-TBD.
+Print standard linux man page with navigation.
 
 =item B<--version>
 
-TBD.
-
-=item B<--config>
-
-TBD.
+Just print current version.
 
 =item B<--daemon>
 
-TBD.
+Start run in background.
+
+=item B<--config>
+
+By default script search configuration file ftp-dir-sync.[conf|ini] in locations: /etc, current dir, script dir. 
+This option override this setting.
 
 =item B<--install>
 
-TBD.
+Instal on Windows machines as system service runned as system user if username not explicitly specified.
+
+=item B<--user>
+
+Specify user to run service.
 
 =item B<--uninstall>
 
-TBD.
+Uninstall system service on Windows.
 
 =back
 
