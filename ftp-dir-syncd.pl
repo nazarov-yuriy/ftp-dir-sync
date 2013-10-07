@@ -9,6 +9,7 @@ use strict                      qw(refs vars);
 use warnings;
 use feature                     qw(state);
 use English;
+use Storable                    qw(lock_retrieve lock_store);
 
 BEGIN {
 	if ( $OSNAME eq 'MSWin32' ) {
@@ -33,6 +34,11 @@ use constant {
 	DEFAULT_Period    => "3600",
 	DEFAULT_DifDate   => "yes",
 	DEFAULT_DifSize   => "yes",
+};
+use constant {
+	MAGIC_FILE_SUFFIX               => '.g98lk6n8em48lro6',
+	TIMESTAMPS_FILE_NAME            => '.ftp-dir-syncd.files-timestamps-and-sizes',
+	TIMESTAMPS_FILE_EXTENSION       => '.dat'
 };
 my @config_search_paths = (
 	'/etc/ftp-dir-sync.conf',
@@ -297,11 +303,13 @@ sub download_files_recursive($$$$){
 		if($global_config_hash_ref->{'DifDate'} eq 'yes' or $global_config_hash_ref->{'DifSize'} eq 'yes'){
 			if($global_config_hash_ref->{'DifSize'} eq 'yes'){
 				$need_to_download |= ! exists $file_attributes->{$remote_path . '/' . $file} ||
-					$file_attributes->{$remote_path . '/' . $file}{'size'} ne $files{$file}{'size'};
+					$file_attributes->{$remote_path.'/'.$file}{'size'} ne $files{$file}{'size'} ||
+					!-f $local_path.'/'.$file;
 			}
 			if($global_config_hash_ref->{'DifDate'} eq 'yes'){
 				$need_to_download |= ! exists $file_attributes->{$remote_path . '/' . $file} ||
-					$file_attributes->{$remote_path . '/' . $file}{'timestamp'} ne $files{$file}{'timestamp'};
+					$file_attributes->{$remote_path.'/'.$file}{'timestamp'} ne $files{$file}{'timestamp'} ||
+					!-f $local_path.'/'.$file;
 			}
 		}
 		else{
@@ -332,6 +340,12 @@ sub download_files_recursive($$$$){
 
 sub download_files() {
 	state $file_attributes = {};
+	
+	my $saved_file_attributes_filename = TIMESTAMPS_FILE_NAME.MAGIC_FILE_SUFFIX.TIMESTAMPS_FILE_EXTENSION;
+	if(0 == keys %{$file_attributes} && -f $saved_file_attributes_filename){
+		$file_attributes = lock_retrieve($saved_file_attributes_filename);
+	}
+	
 	my $use_passive = !exists $global_config_hash_ref->{'FTPType'} || $global_config_hash_ref->{'FTPType'} eq 'passive';
 	my $host = $global_config_hash_ref->{'Host'};
 	my $ftp  = Net::FTP->new(
@@ -349,6 +363,9 @@ sub download_files() {
 	my $remote_path = $global_config_hash_ref->{'FTPPath'};
 	my $local_path  = $global_config_hash_ref->{'LocalPath'};
 	download_files_recursive($ftp, $file_attributes, $remote_path, $local_path);
+	
+	lock_store($file_attributes, $saved_file_attributes_filename);
+	
 	return;
 }
 
