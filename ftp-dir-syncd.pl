@@ -161,6 +161,20 @@ sub setup_service {
 	return;
 }
 
+sub daemonize() {
+	my $pid = fork();
+	if ( $pid < 0 ) {
+		error("Daemonization failed.");
+	}
+	elsif ($pid) {
+		exit 0;
+	}
+	open( STDIN,  "<", "/dev/null" );
+	open( STDOUT, ">", "/dev/null" );
+	open( STDERR, ">", "/dev/null" );
+	return;
+}
+
 #
 #
 # Platform independent code
@@ -222,20 +236,6 @@ sub read_config($) {
 sub print_usage() {
 	pod2usage(2);
 	return 1;
-}
-
-sub daemonize() {
-	my $pid = fork();
-	if ( $pid < 0 ) {
-		error "Daemonization failed.";
-	}
-	elsif ($pid) {
-		exit 0;
-	}
-	open( STDIN,  "<", "/dev/null" );
-	open( STDOUT, ">", "/dev/null" );
-	open( STDERR, ">", "/dev/null" );
-	return;
 }
 
 #
