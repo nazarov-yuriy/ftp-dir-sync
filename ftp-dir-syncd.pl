@@ -8,6 +8,7 @@ use Term::ReadKey;
 use File::Basename;
 use strict	qw(refs vars);
 use warnings;
+use feature 'state';
 
 BEGIN {
 	if ( $^O eq 'MSWin32' ) {
@@ -42,39 +43,13 @@ my @config_search_paths = (
 	dirname($0).'/ftp-dir-sync.ini',
 );
 
-my $config_hash_ref;
+my $global_config_hash_ref;
 
 #
 #
 # Platform specific code
 #
 #
-
-use constant SERVICE_CONTROL_STOP                  => 0x00000001;
-use constant SERVICE_CONTROL_PAUSE                 => 0x00000002;
-use constant SERVICE_CONTROL_CONTINUE              => 0x00000003;
-use constant SERVICE_CONTROL_INTERROGATE           => 0x00000004;
-use constant SERVICE_CONTROL_SHUTDOWN              => 0x00000005;
-use constant SERVICE_CONTROL_PARAMCHANGE           => 0x00000006;
-use constant SERVICE_CONTROL_NETBINDADD            => 0x00000007;
-use constant SERVICE_CONTROL_NETBINDREMOVE         => 0x00000008;
-use constant SERVICE_CONTROL_NETBINDENABLE         => 0x00000009;
-use constant SERVICE_CONTROL_NETBINDDISABLE        => 0x0000000A;
-use constant SERVICE_CONTROL_DEVICEEVENT           => 0x0000000B;
-use constant SERVICE_CONTROL_HARDWAREPROFILECHANGE => 0x0000000C;
-use constant SERVICE_CONTROL_POWEREVENT            => 0x0000000D;
-use constant SERVICE_CONTROL_SESSIONCHANGE         => 0x0000000E;
-use constant SERVICE_CONTROL_PRESHUTDOWN           => 0x0000000F;
-use constant SERVICE_CONTROL_TIMECHANGE            => 0x00000010; # XP & Vista: Not Supported
-use constant SERVICE_CONTROL_TGIGGEREVENT          => 0x00000020; # XP & Vista: Not Supported
-
-use constant SERVICE_STOPPED                       => 0x00000001;
-use constant SERVICE_START_PENDING                 => 0x00000002;
-use constant SERVICE_STOP_PENDING                  => 0x00000003;
-use constant SERVICE_RUNNING                       => 0x00000004;
-use constant SERVICE_CONTINUE_PENDING              => 0x00000005;
-use constant SERVICE_PAUSE_PENDING                 => 0x00000006;
-use constant SERVICE_PAUSED                        => 0x00000007;
 
 my %Context = (
 	'last_state' => SERVICE_STOPPED,
@@ -126,98 +101,57 @@ sub uninstall() {
 }
 
 sub service_callback {
-    my( $Event, $Context ) = @_;
-    my $Event_debug = Win32::Daemon::QueryLastMessage();
-    Win32::Daemon::QueryLastMessage(1); # Reset the Event
-    my $State = Win32::Daemon::State();
-    print_to_log( "---------- Entering Loop with Status/Event: $State/$Event ($Event_debug)" );
-
-    # Evaluate STATE
-    if( SERVICE_RUNNING == $State ) {
-        $Context->{count}++;
-        print_to_log( "Running!!! Count=$Context->{count}. Timer:".Win32::Daemon::CallbackTimer() );
-    } elsif( SERVICE_START_PENDING == $State ) {
-        # Initialization code
-        $Context->{last_state} = SERVICE_RUNNING;
-        Win32::Daemon::State( SERVICE_RUNNING );
-        print_to_log( "Service initialized. Setting state to Running." );
-    } elsif( SERVICE_PAUSE_PENDING == $State ) {
-        $Context->{last_state} = SERVICE_PAUSED;
-        Win32::Daemon::State( SERVICE_PAUSED );
-        Win32::Daemon::CallbackTimer( 0 );
-        print_to_log( "Pausing." );
-    } elsif( SERVICE_CONTINUE_PENDING == $State ) {
-        $Context->{last_state} = SERVICE_RUNNING;
-        Win32::Daemon::State( SERVICE_RUNNING );
-        Win32::Daemon::CallbackTimer( 5000 );
-        print_to_log( "Resuming from paused state." );
-    } else {
-        print_to_log( "Service got an unknown STATE: $State" );
-    }
-    
-    # Evaluate CONTROLS / Events
-    if( SERVICE_CONTROL_STOP == $Event ) {
-        $Context->{last_state} = SERVICE_STOPPED; # eigentlich STOP_PENDING ???
-        Win32::Daemon::State( [ state => SERVICE_STOPPED, error => 1234 ] );
-        print_to_log( "Stopping service." );
-        
-        # We need to notify the Daemon that we want to stop callbacks and the service.
-        Win32::Daemon::StopService();
-    } elsif( SERVICE_CONTROL_SHUTDOWN == $Event ) {
-        print_to_log( "Event: SHUTTING DOWN!  *** Stopping this service ***" );
-        # We need to notify the Daemon that we want to stop callbacks and the service.
-        Win32::Daemon::StopService();
-    } elsif( SERVICE_CONTROL_PRESHUTDOWN == $Event ) {
-        print_to_log( "Event: Preshutdown!" );
-    } elsif( SERVICE_CONTROL_INTERROGATE == $Event ) {
-        print_to_log( "Event: Interrogation!" );
-    } elsif( SERVICE_CONTROL_NETBINDADD == $Event )    {
-        print_to_log( "Event: Adding a network binding!" );
-    } elsif( SERVICE_CONTROL_NETBINDREMOVE == $Event ) {
-        print_to_log( "Event: Removing a network binding!" );
-    } elsif( SERVICE_CONTROL_NETBINDENABLE == $Event ) {
-        print_to_log( "Event: Network binding has been enabled!" );
-    } elsif( SERVICE_CONTROL_NETBINDDISABLE == $Event )    {
-        print_to_log( "Event: Network binding has been disabled!" );
-    } elsif( SERVICE_CONTROL_DEVICEEVENT == $Event ) {
-        print_to_log( "Event: A device has issued some event of some sort!" );
-    } elsif( SERVICE_CONTROL_HARDWAREPROFILECHANGE == $Event ) {
-        print_to_log( "Event: Hardware profile has changed!" );
-    } elsif( SERVICE_CONTROL_POWEREVENT == $Event ) {
-        print_to_log( "Event: Some power event has occured!" );
-    } elsif( SERVICE_CONTROL_SESSIONCHANGE == $Event ) {
-        print_to_log( "Event: User session has changed!" );
-    } else {
-        # Take care of unhandled states by setting the State()
-        # to whatever the last state was we set...
-        Win32::Daemon::State( $Context->{last_state} );
-        print_to_log( "Got an unknown EVENT: $Event" );
-    }
-    return();
+	my( $Event, $Context ) = @_;
+	my $State = Win32::Daemon::State();
+	
+	# Evaluate CONTROLS / Events
+	if( SERVICE_CONTROL_STOP == $Event ) {
+		$Context->{last_state} = SERVICE_STOPPED;
+		Win32::Daemon::State( SERVICE_STOPPED );
+		print_to_log( "Stopping service." );
+		
+		# We need to notify the Daemon that we want to stop callbacks and the service.
+		Win32::Daemon::StopService();
+	} elsif(SERVICE_CONTROL_START == $Event) {
+		Win32::Daemon::State( SERVICE_RUNNING );
+		$Context->{last_state} = SERVICE_RUNNING;
+	} elsif(SERVICE_CONTROL_RUNNING == $Event) {
+		print_to_log( "RUNNING EVENT" );
+		eval { download_files(); };
+		if ( defined $@ ) {
+			print_to_log($@);
+		}
+	} elsif(SERVICE_CONTROL_PAUSE == $Event) {
+		print_to_log( "PAUSE EVENT" );
+		$Context->{last_state} = SERVICE_PAUSED;
+		Win32::Daemon::State( SERVICE_PAUSED );
+		Win32::Daemon::CallbackTimer( 0 );
+		print_to_log( "Pausing." );
+	} elsif(SERVICE_CONTROL_CONTINUE == $Event) {
+		print_to_log( "CONTINUE EVENT" );
+		$Context->{last_state} = SERVICE_RUNNING;
+		Win32::Daemon::State( SERVICE_RUNNING );
+		Win32::Daemon::CallbackTimer( $global_config_hash_ref->{'Period'} * 1000 );
+		print_to_log( "Resuming from paused state." );
+	} else {
+		# Take care of unhandled states by setting the State()
+		# to whatever the last state was we set...
+		Win32::Daemon::State( $Context->{last_state} );
+		print_to_log( "Got an unknown EVENT: $Event" );
+	}
+	return();	#i don't know why, but it is necessary
 }
 
 sub setup_service {
-	Win32::Daemon::AcceptedControls(&SERVICE_CONTROL_STOP        |
-                                &SERVICE_CONTROL_PAUSE        |
-                                &SERVICE_CONTROL_CONTINUE    |
-                                &SERVICE_CONTROL_INTERROGATE|
-                                &SERVICE_CONTROL_SHUTDOWN    |
-                                &SERVICE_CONTROL_PARAMCHANGE|
-                                &SERVICE_CONTROL_NETBINDADD |
-                                &SERVICE_CONTROL_NETBINDREMOVE |
-                                &SERVICE_CONTROL_NETBINDENABLE | 
-                                &SERVICE_CONTROL_NETBINDDISABLE|
-                                &SERVICE_CONTROL_DEVICEEVENT   |
-                                &SERVICE_CONTROL_HARDWAREPROFILECHANGE |
-                                &SERVICE_CONTROL_POWEREVENT        |
-                                &SERVICE_CONTROL_SESSIONCHANGE  |
-                                &SERVICE_CONTROL_PRESHUTDOWN    |
-                                &SERVICE_CONTROL_TIMECHANGE        |
-                                &SERVICE_CONTROL_TGIGGEREVENT );
+	Win32::Daemon::AcceptedControls(
+		&SERVICE_CONTROL_STOP |
+		&SERVICE_CONTROL_PAUSE |
+		&SERVICE_CONTROL_CONTINUE
+	);
 	Win32::Daemon::RegisterCallbacks( \&service_callback ) or error("register callbacks failed\n");
 	print_to_log("Registered");
 
-	Win32::Daemon::StartService( \%Context, 5000 );
+	Win32::Daemon::StartService( \%Context, $global_config_hash_ref->{'Period'} * 1000 );
 	print_to_log("Started");
 	exit 0;
 }
@@ -240,7 +174,7 @@ sub error($) {
 sub print_to_log($) {
 	my ($message) = @_;
 	open LOG, '>>', dirname($0).'/log.txt';
-	print LOG "$message\n";	#ToDo: remove it after debug completed.
+	print LOG time()." $message\n";	#ToDo: remove it after debug completed.
 	close LOG;
 }
 
@@ -305,8 +239,9 @@ sub print_man(){
 }
 
 sub download_files() {
-	my $use_passive = !exists $config_hash_ref->{'FTPType'} || $config_hash_ref->{'FTPType'} eq 'passive';
-	my $host = $config_hash_ref->{'Host'};
+	state $file_attributes = {};
+	my $use_passive = !exists $global_config_hash_ref->{'FTPType'} || $global_config_hash_ref->{'FTPType'} eq 'passive';
+	my $host = $global_config_hash_ref->{'Host'};
 	my $ftp  = Net::FTP->new(
 		$host,
 		Debug   => 0,
@@ -314,16 +249,16 @@ sub download_files() {
 		Timeout => 10,
 	) or die "Cannot connect to $host: $@";
 
-	$ftp->login( $config_hash_ref->{'User'},
-		$config_hash_ref->{'Password'} )
+	$ftp->login( $global_config_hash_ref->{'User'},
+		$global_config_hash_ref->{'Password'} )
 	  or die "Cannot login ", $ftp->message;
 
-	my $remote_path = $config_hash_ref->{'FTPPath'};
-	my $local_path  = $config_hash_ref->{'LocalPath'};
+	my $remote_path = $global_config_hash_ref->{'FTPPath'};
+	my $local_path  = $global_config_hash_ref->{'LocalPath'};
 	my @files       = $ftp->ls($remote_path);
 
 	for my $file (@files) {
-		print "getting file $file\n";    #ToDo: remove it after debug completed.
+		print_to_log "getting file $file\n";    #ToDo: remove it after debug completed.
 		$ftp->get(
 			$remote_path . '/' . $file,
 			$local_path . '/' . $file
@@ -342,10 +277,10 @@ sub run_daemon($$) {
 		error "Unable to open configuration file.";
 		print_to_log("Unable to open configuration file.");
 	}
-	$config_hash_ref = read_config($config_file_path);
-	print Dumper $config_hash_ref;    #ToDo: remove it after debug completed.
+	$global_config_hash_ref = read_config($config_file_path);
+	print Dumper $global_config_hash_ref;    #ToDo: remove it after debug completed.
 
-	unless ( defined $config_hash_ref->{'Host'} ) {
+	unless ( defined $global_config_hash_ref->{'Host'} ) {
 		error "Host is not specified.";
 	}
 	if($^O eq 'linux'){
@@ -356,10 +291,8 @@ sub run_daemon($$) {
 			if ( defined $@ ) {
 				print_to_log($@);
 			}
-			print_to_log( "Files were downloaded. Waiting "
-				  . $config_hash_ref->{'Period'}
-				  . " s." );
-			sleep $config_hash_ref->{'Period'};
+			print_to_log( "Files were downloaded. Waiting ".$global_config_hash_ref->{'Period'}." s.");
+			sleep $global_config_hash_ref->{'Period'};
 		}
 	}
 	elsif($^O eq 'MSWin32'){
