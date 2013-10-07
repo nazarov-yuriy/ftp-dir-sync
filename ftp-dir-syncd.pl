@@ -6,12 +6,13 @@ use Data::Dumper;
 use Pod::Usage;
 use Term::ReadKey;
 use File::Basename;
-use strict	qw(refs vars);
+use strict                      qw(refs vars);
 use warnings;
-use feature 'state';
+use feature                     qw(state);
+use English;
 
 BEGIN {
-	if ( $^O eq 'MSWin32' ) {
+	if ( $OSNAME eq 'MSWin32' ) {
 		require Win32::Daemon;
 		Win32::Daemon->import();
 	}
@@ -23,7 +24,7 @@ BEGIN {
 #
 #
 use constant {
-	DAEMON_VERSION    => "0.1",
+	DAEMON_VERSION    => "0.2",
 	DEFAULT_User      => "anonymous",
 	DEFAULT_Password  => '',
 	DEFAULT_FTPType   => "passive",
@@ -39,8 +40,8 @@ my @config_search_paths = (
 	'/etc/ftp-dir-sync.ini',
 	'./ftp-dir-sync.conf',
 	'./ftp-dir-sync.ini',
-	dirname($0).'/ftp-dir-sync.conf',
-	dirname($0).'/ftp-dir-sync.ini',
+	dirname($PROGRAM_NAME).'/ftp-dir-sync.conf',
+	dirname($PROGRAM_NAME).'/ftp-dir-sync.ini',
 );
 
 my $global_config_hash_ref;
@@ -60,14 +61,14 @@ my %service_properties_hash = (
 	'name'        => 'ftp-dir-sync service',
 	'description' => 'keep local and remote directories in sync',
 	'display'     => 'ftp-dir-sync service',
-	'path'        => $^X,
-	'parameters'  => "\"$0\" --daemon",
+	'path'        => $EXECUTABLE_NAME,
+	'parameters'  => "\"$PROGRAM_NAME\" --daemon",
 );
 
 sub install($) {
 	my ($user) = @_;
 	
-	error("Unsupported by this platform.") unless $^O eq 'MSWin32';
+	error("Unsupported by this platform.") unless $OSNAME eq 'MSWin32';
 	
 	if (defined $user){
 		$service_properties_hash{'user'} = ".\\$user";
@@ -83,12 +84,13 @@ sub install($) {
 	}
 	else {
 		print "Error " . Win32::Daemon::GetLastError();
-		exit 1;
+		return 1;
 	}
+	return 0;
 }
 
 sub uninstall() {
-	error("Unsupported by this platform.") unless $^O eq 'MSWin32';
+	error("Unsupported by this platform.") unless $OSNAME eq 'MSWin32';
 	
 	if ( Win32::Daemon::DeleteService( $service_properties_hash{'name'} ) ) {
 		print "Uninstalled";
@@ -118,8 +120,11 @@ sub service_callback {
 	} elsif(SERVICE_CONTROL_RUNNING == $Event) {
 		print_to_log( "RUNNING EVENT" );
 		eval { download_files(); };
-		if ( defined $@ ) {
-			print_to_log($@);
+		if ( defined $EVAL_ERROR ) {
+			print_to_log($EVAL_ERROR);
+		}
+		else{
+			print_to_log("Synchronization iteration was completed.");
 		}
 	} elsif(SERVICE_CONTROL_PAUSE == $Event) {
 		print_to_log( "PAUSE EVENT" );
@@ -139,7 +144,7 @@ sub service_callback {
 		Win32::Daemon::State( $Context->{last_state} );
 		print_to_log( "Got an unknown EVENT: $Event" );
 	}
-	return();	#i don't know why, but it is necessary
+	return();               #i don't know why, but it is necessary
 }
 
 sub setup_service {
@@ -147,13 +152,14 @@ sub setup_service {
 		&SERVICE_CONTROL_STOP |
 		&SERVICE_CONTROL_PAUSE |
 		&SERVICE_CONTROL_CONTINUE
-	);
-	Win32::Daemon::RegisterCallbacks( \&service_callback ) or error("register callbacks failed\n");
+	)or error("register accepted controls failed");
+	Win32::Daemon::RegisterCallbacks( \&service_callback ) or error("register callbacks failed");
 	print_to_log("Registered");
 
-	Win32::Daemon::StartService( \%Context, $global_config_hash_ref->{'Period'} * 1000 );
 	print_to_log("Started");
-	exit 0;
+	Win32::Daemon::StartService( \%Context, $global_config_hash_ref->{'Period'} * 1000 );
+	print_to_log("Finished");
+	return;
 }
 
 #
@@ -173,9 +179,11 @@ sub error($) {
 
 sub print_to_log($) {
 	my ($message) = @_;
-	open LOG, '>>', dirname($0).'/log.txt';
-	print LOG time()." $message\n";	#ToDo: remove it after debug completed.
-	close LOG;
+	if(open my $log_fh, '>>', dirname($PROGRAM_NAME).'/log.txt'){
+		print $log_fh time()." $message\n";             #ToDo: remove it after debug completed.
+		close $log_fh;
+	}
+	return;
 }
 
 sub read_config($) {
@@ -216,6 +224,7 @@ sub daemonize() {
 	open( STDIN,  "<", "/dev/null" );
 	open( STDOUT, ">", "/dev/null" );
 	open( STDERR, ">", "/dev/null" );
+	return;
 }
 
 #
@@ -276,6 +285,7 @@ sub download_files_recursive($$$){
 		mkdir($local_path.'/'.$dir);
 		download_files_recursive($ftp, $remote_path.'/'.$dir, $local_path.'/'.$dir);
 	}
+	return;
 }
 
 sub download_files() {
@@ -289,13 +299,15 @@ sub download_files() {
 		Timeout => 10,
 	) or die "Cannot connect to $host: $@";
 
-	$ftp->login( $global_config_hash_ref->{'User'},
-		$global_config_hash_ref->{'Password'} )
-	  or die "Cannot login ", $ftp->message;
+	$ftp->login(
+		$global_config_hash_ref->{'User'},
+		$global_config_hash_ref->{'Password'}
+	) or die "Cannot login ", $ftp->message;
 
 	my $remote_path = $global_config_hash_ref->{'FTPPath'};
 	my $local_path  = $global_config_hash_ref->{'LocalPath'};
 	download_files_recursive($ftp, $remote_path, $local_path);
+	return;
 }
 
 sub run_daemon($$) {
@@ -316,7 +328,7 @@ sub run_daemon($$) {
 		error "Host is not specified.";
 		print_to_log("Host is not specified.");
 	}
-	if($^O eq 'linux'){
+	if($OSNAME eq 'linux'){
 		daemonize();
 		
 		while (1) {
@@ -329,15 +341,17 @@ sub run_daemon($$) {
 			print_to_log( "Files were downloaded. Waiting ".$global_config_hash_ref->{'Period'}." s.");
 			my $sleep_time = $global_config_hash_ref->{'Period'} - ($end - $start);
 			$sleep_time = 0 if $sleep_time < 0;
-			sleep $sleep_time;	#a bit different with windows implementation
+			sleep $sleep_time;              #a bit different with windows implementation
 		}
 	}
-	elsif($^O eq 'MSWin32'){
+	elsif($OSNAME eq 'MSWin32'){
 		setup_service();
 	}
 	else{
 		error("Unsupported platform.");
+		return 1;
 	}
+	return 0;
 }
 
 sub main() {
