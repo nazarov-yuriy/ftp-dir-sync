@@ -278,6 +278,13 @@ sub download_files_recursive($$$$){
 	}
 	
 	for my $file (keys %files){
+		my $mask = $global_config_hash_ref->{'FileMask'};
+		$mask =~ s#\?#\.#;
+		$mask =~ s#\*#\.\*#;
+		unless ( $file =~ /^$mask$/ ) {        #ToDo: revork mask handling. Direct using provided by user RegExp too risky.
+			print_to_log "skipped(not fit to mask) file $remote_path/$file\n";
+			next;
+		}
 		my $need_to_download = 0;
 		if($global_config_hash_ref->{'DifDate'} eq 'yes' or $global_config_hash_ref->{'DifSize'} eq 'yes'){
 			if($global_config_hash_ref->{'DifSize'} eq 'yes'){
@@ -295,6 +302,7 @@ sub download_files_recursive($$$$){
 		
 		if($need_to_download){
 			print_to_log "getting file $remote_path/$file\n";
+			mkdir($local_path) unless -d $local_path;
 			$ftp->get(
 				$remote_path . '/' . $file,
 				$local_path . '/' . $file
@@ -303,13 +311,12 @@ sub download_files_recursive($$$$){
 			$file_attributes->{$remote_path . '/' . $file}{'timestamp'} = $files{$file}{'timestamp'};
 		}
 		else{
-			print_to_log "skipped file $remote_path/$file\n";
+			print_to_log "skipped(not changed) file $remote_path/$file\n";
 		}
 	}
 	
 	for my $dir (keys %dirs){
 		print_to_log "recursive call dir $remote_path/$dir\n";    #ToDo: remove it after debug completed.
-		mkdir($local_path.'/'.$dir);
 		download_files_recursive($ftp, $file_attributes, $remote_path.'/'.$dir, $local_path.'/'.$dir);
 	}
 	return;
