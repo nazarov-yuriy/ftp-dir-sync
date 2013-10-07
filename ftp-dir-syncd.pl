@@ -2,7 +2,6 @@
 use Getopt::Long;
 use Net::FTP;
 use Config::IniFiles;
-use Data::Dumper;
 use Pod::Usage;
 use Term::ReadKey;
 use File::Basename;
@@ -364,7 +363,6 @@ sub run_daemon($$) {
 		error "Unable to open configuration file.";
 	}
 	$global_config_hash_ref = read_config($config_file_path);
-	print Dumper $global_config_hash_ref;    #ToDo: remove it after debug completed.
 
 	unless ( defined $global_config_hash_ref->{'Host'} ) {
 		error "Host is not specified.";
