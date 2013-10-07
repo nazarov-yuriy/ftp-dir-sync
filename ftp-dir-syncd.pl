@@ -360,6 +360,7 @@ sub download_files() {
 		$global_config_hash_ref->{'User'},
 		$global_config_hash_ref->{'Password'}
 	) or die "Cannot login ", $ftp->message;
+	$ftp->binary();
 
 	my $remote_path = $global_config_hash_ref->{'FTPPath'};
 	my $local_path  = $global_config_hash_ref->{'LocalPath'};
