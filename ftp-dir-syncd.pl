@@ -204,6 +204,14 @@ sub read_config($) {
 	tie %ini, 'Config::IniFiles', ( -file => $config_file_path );
 	for my $k (keys %{$ini{'global'}}) {
 		$config{$k} = $ini{'global'}{$k};
+		if($k eq 'Period'){
+			if($config{$k} =~ /^(\d)+\s*m$/){
+				$config{$k} = int($1 * 60);
+			}
+			if($config{$k} =~ /^(\d)+\s*h$/){
+				$config{$k} = int($1 * 3600);
+			}
+		}
 		if($k eq 'DifDate' || $k eq 'DifSize'){         #ToDo: revork flags handling
 			$config{$k} = 'yes' if $config{$k} eq 'true';
 		}
