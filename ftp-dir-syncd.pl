@@ -238,6 +238,46 @@ sub print_man(){
 	return 0;
 }
 
+sub parse_dir_output($){
+	my ($line) = @_;
+	my %file;
+	my ($mode, undef, $uid, $gid, $size, $month, $date, $time_year_name) = split /\s+/, $line, 8;
+	my ($time_year, $name) = split / /, $time_year_name;
+	$file{'name'} = $name;
+	$file{'is_dir'} = $mode =~ /^d/;
+	return \%file;
+}
+
+sub download_files_recursive($$$);
+sub download_files_recursive($$$){
+	my($ftp, $remote_path, $local_path) = @_;
+	my %dirs;
+	my %files;
+	for my $line ($ftp->dir($remote_path)){
+		my $file_hash_ref = parse_dir_output($line);
+		if($file_hash_ref->{'is_dir'}){
+			$dirs{ $file_hash_ref->{'name'} } = $file_hash_ref;
+		}
+		else{
+			$files{ $file_hash_ref->{'name'} } = $file_hash_ref;
+		}
+	}
+	
+	for my $file (keys %files){
+		print_to_log "getting file $remote_path/$file\n";    #ToDo: remove it after debug completed.
+		$ftp->get(
+			$remote_path . '/' . $file,
+			$local_path . '/' . $file
+		);
+	}
+	
+	for my $dir (keys %dirs){
+		print_to_log "recursive call dir $remote_path/$dir\n";    #ToDo: remove it after debug completed.
+		mkdir($local_path.'/'.$dir);
+		download_files_recursive($ftp, $remote_path.'/'.$dir, $local_path.'/'.$dir);
+	}
+}
+
 sub download_files() {
 	state $file_attributes = {};
 	my $use_passive = !exists $global_config_hash_ref->{'FTPType'} || $global_config_hash_ref->{'FTPType'} eq 'passive';
@@ -255,15 +295,7 @@ sub download_files() {
 
 	my $remote_path = $global_config_hash_ref->{'FTPPath'};
 	my $local_path  = $global_config_hash_ref->{'LocalPath'};
-	my @files       = $ftp->ls($remote_path);
-
-	for my $file (@files) {
-		print_to_log "getting file $file\n";    #ToDo: remove it after debug completed.
-		$ftp->get(
-			$remote_path . '/' . $file,
-			$local_path . '/' . $file
-		);
-	}
+	download_files_recursive($ftp, $remote_path, $local_path);
 }
 
 sub run_daemon($$) {
@@ -282,17 +314,22 @@ sub run_daemon($$) {
 
 	unless ( defined $global_config_hash_ref->{'Host'} ) {
 		error "Host is not specified.";
+		print_to_log("Host is not specified.");
 	}
 	if($^O eq 'linux'){
 		daemonize();
 		
 		while (1) {
+			my $start = time();
 			eval { download_files(); };
+			my $end = time();
 			if ( defined $@ ) {
 				print_to_log($@);
 			}
 			print_to_log( "Files were downloaded. Waiting ".$global_config_hash_ref->{'Period'}." s.");
-			sleep $global_config_hash_ref->{'Period'};
+			my $sleep_time = $global_config_hash_ref->{'Period'} - ($end - $start);
+			$sleep_time = 0 if $sleep_time < 0;
+			sleep $sleep_time;	#a bit different with windows implementation
 		}
 	}
 	elsif($^O eq 'MSWin32'){
