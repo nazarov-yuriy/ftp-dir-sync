@@ -204,6 +204,9 @@ sub read_config($) {
 	tie %ini, 'Config::IniFiles', ( -file => $config_file_path );
 	for my $k (keys %{$ini{'global'}}) {
 		$config{$k} = $ini{'global'}{$k};
+		if($k eq 'DifDate' || $k eq 'DifSize'){         #ToDo: revork flags handling
+			$config{$k} = 'yes' if $config{$k} eq 'true';
+		}
 	}
 	return \%config;
 }
@@ -250,16 +253,18 @@ sub print_man(){
 sub parse_dir_output($){
 	my ($line) = @_;
 	my %file;
-	my ($mode, undef, $uid, $gid, $size, $month, $date, $time_year_name) = split /\s+/, $line, 8;
+	my ($mode, undef, $uid, $gid, $size, $month, $day_of_month, $time_year_name) = split /\s+/, $line, 8;
 	my ($time_year, $name) = split / /, $time_year_name;
 	$file{'name'} = $name;
 	$file{'is_dir'} = $mode =~ /^d/;
+	$file{'size'} = $size;
+	$file{'timestamp'} = "$month $day_of_month $time_year";
 	return \%file;
 }
 
-sub download_files_recursive($$$);
-sub download_files_recursive($$$){
-	my($ftp, $remote_path, $local_path) = @_;
+sub download_files_recursive($$$$);
+sub download_files_recursive($$$$){
+	my($ftp, $file_attributes, $remote_path, $local_path) = @_;
 	my %dirs;
 	my %files;
 	for my $line ($ftp->dir($remote_path)){
@@ -273,17 +278,39 @@ sub download_files_recursive($$$){
 	}
 	
 	for my $file (keys %files){
-		print_to_log "getting file $remote_path/$file\n";    #ToDo: remove it after debug completed.
-		$ftp->get(
-			$remote_path . '/' . $file,
-			$local_path . '/' . $file
-		);
+		my $need_to_download = 0;
+		if($global_config_hash_ref->{'DifDate'} eq 'yes' or $global_config_hash_ref->{'DifSize'} eq 'yes'){
+			if($global_config_hash_ref->{'DifSize'} eq 'yes'){
+				$need_to_download |= ! exists $file_attributes->{$remote_path . '/' . $file} ||
+					$file_attributes->{$remote_path . '/' . $file}{'size'} ne $files{$file}{'size'};
+			}
+			if($global_config_hash_ref->{'DifDate'} eq 'yes'){
+				$need_to_download |= ! exists $file_attributes->{$remote_path . '/' . $file} ||
+					$file_attributes->{$remote_path . '/' . $file}{'timestamp'} ne $files{$file}{'timestamp'};
+			}
+		}
+		else{
+			$need_to_download = 1
+		}
+		
+		if($need_to_download){
+			print_to_log "getting file $remote_path/$file\n";
+			$ftp->get(
+				$remote_path . '/' . $file,
+				$local_path . '/' . $file
+			);
+			$file_attributes->{$remote_path . '/' . $file}{'size'} = $files{$file}{'size'};
+			$file_attributes->{$remote_path . '/' . $file}{'timestamp'} = $files{$file}{'timestamp'};
+		}
+		else{
+			print_to_log "skipped file $remote_path/$file\n";
+		}
 	}
 	
 	for my $dir (keys %dirs){
 		print_to_log "recursive call dir $remote_path/$dir\n";    #ToDo: remove it after debug completed.
 		mkdir($local_path.'/'.$dir);
-		download_files_recursive($ftp, $remote_path.'/'.$dir, $local_path.'/'.$dir);
+		download_files_recursive($ftp, $file_attributes, $remote_path.'/'.$dir, $local_path.'/'.$dir);
 	}
 	return;
 }
@@ -306,7 +333,7 @@ sub download_files() {
 
 	my $remote_path = $global_config_hash_ref->{'FTPPath'};
 	my $local_path  = $global_config_hash_ref->{'LocalPath'};
-	download_files_recursive($ftp, $remote_path, $local_path);
+	download_files_recursive($ftp, $file_attributes, $remote_path, $local_path);
 	return;
 }
 
