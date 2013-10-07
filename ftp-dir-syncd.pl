@@ -50,7 +50,33 @@ my $config_hash_ref;
 #
 #
 
-my %service_context = (
+use constant SERVICE_CONTROL_STOP                  => 0x00000001;
+use constant SERVICE_CONTROL_PAUSE                 => 0x00000002;
+use constant SERVICE_CONTROL_CONTINUE              => 0x00000003;
+use constant SERVICE_CONTROL_INTERROGATE           => 0x00000004;
+use constant SERVICE_CONTROL_SHUTDOWN              => 0x00000005;
+use constant SERVICE_CONTROL_PARAMCHANGE           => 0x00000006;
+use constant SERVICE_CONTROL_NETBINDADD            => 0x00000007;
+use constant SERVICE_CONTROL_NETBINDREMOVE         => 0x00000008;
+use constant SERVICE_CONTROL_NETBINDENABLE         => 0x00000009;
+use constant SERVICE_CONTROL_NETBINDDISABLE        => 0x0000000A;
+use constant SERVICE_CONTROL_DEVICEEVENT           => 0x0000000B;
+use constant SERVICE_CONTROL_HARDWAREPROFILECHANGE => 0x0000000C;
+use constant SERVICE_CONTROL_POWEREVENT            => 0x0000000D;
+use constant SERVICE_CONTROL_SESSIONCHANGE         => 0x0000000E;
+use constant SERVICE_CONTROL_PRESHUTDOWN           => 0x0000000F;
+use constant SERVICE_CONTROL_TIMECHANGE            => 0x00000010; # XP & Vista: Not Supported
+use constant SERVICE_CONTROL_TGIGGEREVENT          => 0x00000020; # XP & Vista: Not Supported
+
+use constant SERVICE_STOPPED                       => 0x00000001;
+use constant SERVICE_START_PENDING                 => 0x00000002;
+use constant SERVICE_STOP_PENDING                  => 0x00000003;
+use constant SERVICE_RUNNING                       => 0x00000004;
+use constant SERVICE_CONTINUE_PENDING              => 0x00000005;
+use constant SERVICE_PAUSE_PENDING                 => 0x00000006;
+use constant SERVICE_PAUSED                        => 0x00000007;
+
+my %Context = (
 	'last_state' => SERVICE_STOPPED,
 	'start_time' => time(),
 );
@@ -65,6 +91,9 @@ my %service_properties_hash = (
 
 sub install($) {
 	my ($user) = @_;
+	
+	error("Unsupported by this platform.") unless $^O eq 'MSWin32';
+	
 	if (defined $user){
 		$service_properties_hash{'user'} = ".\\$user";
 		print "Password for user $user: ";
@@ -84,6 +113,8 @@ sub install($) {
 }
 
 sub uninstall() {
+	error("Unsupported by this platform.") unless $^O eq 'MSWin32';
+	
 	if ( Win32::Daemon::DeleteService( $service_properties_hash{'name'} ) ) {
 		print "Uninstalled";
 		return 0;
@@ -94,55 +125,100 @@ sub uninstall() {
 	}
 }
 
-sub service_callback_start() {
-	my( $event, $context ) = @_;
-	$service_context{last_state} = SERVICE_RUNNING;
-	Win32::Daemon::State( SERVICE_RUNNING );
-	print_to_log("Event start: $event");
-}
+sub service_callback {
+    my( $Event, $Context ) = @_;
+    my $Event_debug = Win32::Daemon::QueryLastMessage();
+    Win32::Daemon::QueryLastMessage(1); # Reset the Event
+    my $State = Win32::Daemon::State();
+    print_to_log( "---------- Entering Loop with Status/Event: $State/$Event ($Event_debug)" );
 
-sub service_callback_running() {
-	my( $event, $context ) = @_;
-	print_to_log("Event running start: $event");
-	if( SERVICE_RUNNING == Win32::Daemon::State() ) {
-		#eval { download_files($config_hash_ref); };
-		sleep 20;
-	}
-	print_to_log("Event running end: $event");
-}
-
-sub service_callback_stop() {
-	my( $event, $context ) = @_;
-	$service_context{'last_state'} = SERVICE_RUNNING;
-	Win32::Daemon::State( SERVICE_RUNNING );
-	print_to_log("Event stop: $event");
-}
-
-sub service_callback_pause() {
-	my( $event, $context ) = @_;
-	$service_context{'last_state'} = SERVICE_RUNNING;
-	Win32::Daemon::State( SERVICE_RUNNING );
-	print_to_log("Event pause: $event");
-}
-
-sub service_callback_continue() {
-	my( $event, $context ) = @_;
-	$service_context{'last_state'} = SERVICE_STOPPED;
-	Win32::Daemon::State( SERVICE_STOPPED );
-	print_to_log("Event continue: $event");
+    # Evaluate STATE
+    if( SERVICE_RUNNING == $State ) {
+        $Context->{count}++;
+        print_to_log( "Running!!! Count=$Context->{count}. Timer:".Win32::Daemon::CallbackTimer() );
+    } elsif( SERVICE_START_PENDING == $State ) {
+        # Initialization code
+        $Context->{last_state} = SERVICE_RUNNING;
+        Win32::Daemon::State( SERVICE_RUNNING );
+        print_to_log( "Service initialized. Setting state to Running." );
+    } elsif( SERVICE_PAUSE_PENDING == $State ) {
+        $Context->{last_state} = SERVICE_PAUSED;
+        Win32::Daemon::State( SERVICE_PAUSED );
+        Win32::Daemon::CallbackTimer( 0 );
+        print_to_log( "Pausing." );
+    } elsif( SERVICE_CONTINUE_PENDING == $State ) {
+        $Context->{last_state} = SERVICE_RUNNING;
+        Win32::Daemon::State( SERVICE_RUNNING );
+        Win32::Daemon::CallbackTimer( 5000 );
+        print_to_log( "Resuming from paused state." );
+    } else {
+        print_to_log( "Service got an unknown STATE: $State" );
+    }
+    
+    # Evaluate CONTROLS / Events
+    if( SERVICE_CONTROL_STOP == $Event ) {
+        $Context->{last_state} = SERVICE_STOPPED; # eigentlich STOP_PENDING ???
+        Win32::Daemon::State( [ state => SERVICE_STOPPED, error => 1234 ] );
+        print_to_log( "Stopping service." );
+        
+        # We need to notify the Daemon that we want to stop callbacks and the service.
+        Win32::Daemon::StopService();
+    } elsif( SERVICE_CONTROL_SHUTDOWN == $Event ) {
+        print_to_log( "Event: SHUTTING DOWN!  *** Stopping this service ***" );
+        # We need to notify the Daemon that we want to stop callbacks and the service.
+        Win32::Daemon::StopService();
+    } elsif( SERVICE_CONTROL_PRESHUTDOWN == $Event ) {
+        print_to_log( "Event: Preshutdown!" );
+    } elsif( SERVICE_CONTROL_INTERROGATE == $Event ) {
+        print_to_log( "Event: Interrogation!" );
+    } elsif( SERVICE_CONTROL_NETBINDADD == $Event )    {
+        print_to_log( "Event: Adding a network binding!" );
+    } elsif( SERVICE_CONTROL_NETBINDREMOVE == $Event ) {
+        print_to_log( "Event: Removing a network binding!" );
+    } elsif( SERVICE_CONTROL_NETBINDENABLE == $Event ) {
+        print_to_log( "Event: Network binding has been enabled!" );
+    } elsif( SERVICE_CONTROL_NETBINDDISABLE == $Event )    {
+        print_to_log( "Event: Network binding has been disabled!" );
+    } elsif( SERVICE_CONTROL_DEVICEEVENT == $Event ) {
+        print_to_log( "Event: A device has issued some event of some sort!" );
+    } elsif( SERVICE_CONTROL_HARDWAREPROFILECHANGE == $Event ) {
+        print_to_log( "Event: Hardware profile has changed!" );
+    } elsif( SERVICE_CONTROL_POWEREVENT == $Event ) {
+        print_to_log( "Event: Some power event has occured!" );
+    } elsif( SERVICE_CONTROL_SESSIONCHANGE == $Event ) {
+        print_to_log( "Event: User session has changed!" );
+    } else {
+        # Take care of unhandled states by setting the State()
+        # to whatever the last state was we set...
+        Win32::Daemon::State( $Context->{last_state} );
+        print_to_log( "Got an unknown EVENT: $Event" );
+    }
+    return();
 }
 
 sub setup_service {
-	Win32::Daemon::RegisterCallbacks({
-		start    => \&service_callback_start,
-		running  => \&service_callback_running,
-		stop     => \&service_callback_stop,
-		pause    => \&service_callback_pause,
-		continue => \&service_callback_continue,
-	}) or error("register callbacks failed\n");
-	print "Registered\n";
-	Win32::Daemon::StartService( \%service_context, 1000 );
-	print "Started\n";
+	Win32::Daemon::AcceptedControls(&SERVICE_CONTROL_STOP        |
+                                &SERVICE_CONTROL_PAUSE        |
+                                &SERVICE_CONTROL_CONTINUE    |
+                                &SERVICE_CONTROL_INTERROGATE|
+                                &SERVICE_CONTROL_SHUTDOWN    |
+                                &SERVICE_CONTROL_PARAMCHANGE|
+                                &SERVICE_CONTROL_NETBINDADD |
+                                &SERVICE_CONTROL_NETBINDREMOVE |
+                                &SERVICE_CONTROL_NETBINDENABLE | 
+                                &SERVICE_CONTROL_NETBINDDISABLE|
+                                &SERVICE_CONTROL_DEVICEEVENT   |
+                                &SERVICE_CONTROL_HARDWAREPROFILECHANGE |
+                                &SERVICE_CONTROL_POWEREVENT        |
+                                &SERVICE_CONTROL_SESSIONCHANGE  |
+                                &SERVICE_CONTROL_PRESHUTDOWN    |
+                                &SERVICE_CONTROL_TIMECHANGE        |
+                                &SERVICE_CONTROL_TGIGGEREVENT );
+	Win32::Daemon::RegisterCallbacks( \&service_callback ) or error("register callbacks failed\n");
+	print_to_log("Registered");
+
+	Win32::Daemon::StartService( \%Context, 5000 );
+	print_to_log("Started");
 	exit 0;
 }
 
