@@ -174,6 +174,7 @@ sub setup_service {
 
 sub error($) {
 	my ($message) = @_;
+	print_to_log("Error: $message");
 	die "$message\n";
 }
 
@@ -361,14 +362,15 @@ sub run_daemon($$) {
 	}
 	unless ( defined $config_file_path ) {
 		error "Unable to open configuration file.";
-		print_to_log("Unable to open configuration file.");
 	}
 	$global_config_hash_ref = read_config($config_file_path);
 	print Dumper $global_config_hash_ref;    #ToDo: remove it after debug completed.
 
 	unless ( defined $global_config_hash_ref->{'Host'} ) {
 		error "Host is not specified.";
-		print_to_log("Host is not specified.");
+	}
+	unless ( -d $global_config_hash_ref->{'LocalPath'} ) {
+		error "Local path not exists.";
 	}
 	if($OSNAME eq 'linux'){
 		daemonize();
