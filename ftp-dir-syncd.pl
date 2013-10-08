@@ -339,13 +339,9 @@ sub download_files_recursive($$$$){
 }
 
 sub download_files() {
-	state $file_attributes = {};
-	
 	my $saved_file_attributes_filename = $global_config_hash_ref->{'LocalPath'}.
 		'/'.TIMESTAMPS_FILE_NAME.MAGIC_FILE_SUFFIX.TIMESTAMPS_FILE_EXTENSION;
-	if(0 == keys %{$file_attributes} && -f $saved_file_attributes_filename){
-		$file_attributes = lock_retrieve($saved_file_attributes_filename);
-	}
+	state $file_attributes = ((-f $saved_file_attributes_filename) ? lock_retrieve($saved_file_attributes_filename) : {});
 	
 	my $use_passive = !exists $global_config_hash_ref->{'FTPType'} || $global_config_hash_ref->{'FTPType'} eq 'passive';
 	my $host = $global_config_hash_ref->{'Host'};
